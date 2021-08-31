@@ -11,6 +11,7 @@ class Timesheet:
         self.credentials = credentials
         self.values = list()
         self.data = list()
+        self.total_hours = Timedelta("00:00:00")
 
     def get_data_from_timesheet(self):
         """Shows basic usage of the Sheets API.
@@ -105,6 +106,7 @@ class Timesheet:
         # Get the unique list of values of the column project
         projects = df.project.unique().tolist()
 
+        print()
         # Calculate the sum of hours per each WP and per each task
         for p in projects:
             mask = df['project'].values == p
@@ -121,6 +123,7 @@ class Timesheet:
             if column1 == '':
                 # array of sum values for project
                 total = aux_df['hours'].sum()
+                self.total_hours += total
                 print(f'project "{p}" total hours "{total}"')
             elif column2 == '':
                 # array of sum values for each wp
@@ -130,10 +133,28 @@ class Timesheet:
                     mask_wp = aux_df['wp'].values == w
                     aux_df_wp = aux_df.loc[mask_wp]
                     total_wps[w] = aux_df_wp['hours'].sum()
+                    self.total_hours += total_wps[w]
                     print(f'project "{p}", wp "{w}", total hours "{total_wps[w]}"')
             else:
                 # array of sum values for each task
-                print('tbd')
+                wps = aux_df.wp.unique().tolist()
+                total_wps = dict()
+                total_tasks = dict()
+                for w in wps:
+                    mask_wp = aux_df['wp'].values == w
+                    aux_df_wp = aux_df.loc[mask_wp]
 
-        print(projects)
+                    tasks = aux_df.task.unique().tolist()
+                    total_tasks = dict()
+                    for t in tasks:
+                        mask_task = aux_df_wp['task'].values == t
+                        aux_df_task = aux_df_wp.loc[mask_task]
+                        total_tasks[t] = aux_df_task['hours'].sum()
+                        self.total_hours += total_tasks[t]
+
+                    total_wps[w] = total_tasks
+                    print(f'project "{p}", wp "{w}", total hours "{total_wps[w]}"')
+
+        # Need to check the hours with the expected hours
+        print(f'\nTotal hours "{self.total_hours}"')
 
