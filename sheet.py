@@ -5,10 +5,10 @@ from structures import Structure
 
 
 class Timesheet:
-    def __init__(self, credentials):
+    def __init__(self, credentials, sheetid, rangename):
         # The ID and range of a sample spreadsheet.
-        self.SAMPLE_SPREADSHEET_ID = "1pacXhdQ8h_Is9kEM4rNm9raTHRQ8lBAAqQ4TZYQFBgo"
-        self.SAMPLE_RANGE_NAME = "Template!B4:N"
+        self.SAMPLE_SPREADSHEET_ID = sheetid
+        self.SAMPLE_RANGE_NAME = rangename
 
         # Google Credentials
         self.credentials = credentials
@@ -23,6 +23,14 @@ class Timesheet:
         self.year = ''
         self.max_working_hours = Timedelta("00:00:00")
 
+        # Calculate correction last row data
+        self.row_correction = 0
+        self.correction = {
+            "v. 20210427": 1,
+            "v. 20210114": 2,
+            "v. 20201217": 2
+        }
+
     def get_data_from_timesheet(self):
         """Shows basic usage of the Sheets API.
         Prints values from a sample spreadsheet.
@@ -35,21 +43,18 @@ class Timesheet:
                                     range=self.SAMPLE_RANGE_NAME).execute()
         values = result.get('values', [])
 
-        #if not values:
-        #    print('No data found.')
-        #else:
-        #    print('Name, Major:')
-        #
-        #    # Print all columns.
-        #    list(map(lambda x: print(f'{x} '), values))
-
         service.close()
         self.values = values
+        self.row_correction = self.correction[values[0][0]]
 
     def data_analysis_validation(self):
-        length = len(self.values)
-        last_data_row = length - 74
-        aux = self.values[9:last_data_row]
+        df = DataFrame(self.values)
+        last_data_row = df.index[df[6] == 'max working hours'].tolist()[0]
+
+        # We substrate 2 lines to this due the the max working hours and the sum
+        # TODO: This only applies to the last version of the template...
+        last_data_row -= self.row_correction
+        aux = self.values[11:last_data_row]
         last_day = int(aux[len(aux) - 1][0])
 
         # Get the days that are weekends
@@ -59,27 +64,30 @@ class Timesheet:
         for i in range(1, last_day):
             # Filter list for day and extract only the corresponding columns of hours
             # and the day is not weekend
-            temp1 = list(filter(lambda x: x[0] in [str(i)] and x[2] != 'WeekEnd Day', aux))
-            temp1 = list(map(lambda x: [x[6], x[7], x[8]], temp1))
+            temp1 = list(filter(lambda x: x[0] in [str(i)] and x[2] not in ['WeekEnd Day', 'Bank Holiday', 'NOT APPLICABLE'], aux))
 
-            # Check difference between "End h" and "Start h"
-            list(map(lambda x: self.__validate_diff_hours__(day=i, hours=x), temp1))
+            # Check if the temp1 is empty, it means that we have a WeekEnd Day or Bank Holiday
+            # Therefore we do not need to validate the data
+            if len(temp1) != 0:
+                temp1 = list(map(lambda x: [x[6], x[7], x[8]], temp1))
 
-            # Check number hours per day equal to 8
-            temp1 = list(map(lambda x: x[2], temp1))
-            self.__validate_sum_hours_day__(day=i, hours=temp1, weekend=weekend)
+                # Check difference between "End h" and "Start h"
+                list(map(lambda x: self.__validate_diff_hours__(day=i, hours=x), temp1))
+
+                # Check number hours per day equal to 8
+                temp1 = list(map(lambda x: x[2], temp1))
+                self.__validate_sum_hours_day__(day=i, hours=temp1, weekend=weekend)
 
         self.data = aux
 
-    def __validate_diff_hours__(self, day, hours):
-        format = '%H:%M'
-
+    @staticmethod
+    def __validate_diff_hours__(day, hours):
         # we specify the input and the format...
         t = datetime.strptime(hours[2], "%H:%M:%S")
         # ...and use datetime's hour, min and sec properties to build a timedelta
         delta = timedelta(hours=t.hour, minutes=t.minute, seconds=t.second)
 
-        diff = datetime.strptime(hours[1], format) - datetime.strptime(hours[0], format)
+        diff = datetime.strptime(hours[1], '%H:%M') - datetime.strptime(hours[0], '%H:%M')
 
         if diff != delta:
             if diff - delta == timedelta(minutes=45):
@@ -87,7 +95,8 @@ class Timesheet:
             else:
                 print(f'ERROR, the difference is not correct on day {day}, hours {hours}, diff {diff - delta}')
 
-    def __validate_sum_hours_day__(self, day, hours, weekend):
+    @staticmethod
+    def __validate_sum_hours_day__(day, hours, weekend):
         # print(day, hours)
         aux = list(map(lambda x: x[2], hours))
 
@@ -122,14 +131,17 @@ class Timesheet:
         for p in projects:
             mask = df['project'].values == p
             aux_df = df.loc[mask]
-            aux_df.columns = ["project", "wp", "task", "hours"]
+            # aux_df.columns = ["project", "wp", "task", "hours"]
 
             # Need to check the column [1](wp) and column [2](task),
-            # - Case 1: if [1] is empty then we create an array of 12 values, each per month with the sum of column [3]
-            # - Case 2: if [1] has value but [2] is empty, create a list of wps in which each of them is the sum of [3]
-            # - Case 3: if [1] and [2] have values, create a list of wps with a list of tasks with the array of sums of [3]
-            column1 = aux_df['wp'].values[1]
-            column2 = aux_df['task'].values[1]
+            # - Case 1: if [1] is empty then we create an array of 12 values, each per month
+            #           with the sum of column [3]
+            # - Case 2: if [1] has value but [2] is empty, create a list of wps in which each
+            #           of them is the sum of [3]
+            # - Case 3: if [1] and [2] have values, create a list of wps with a list of tasks
+            #           with the array of sums of [3]
+            column1 = aux_df['wp'].values[0]
+            column2 = aux_df['task'].values[0]
 
             if column1 == '':
                 # Case 1: array of sum values for project
@@ -139,7 +151,6 @@ class Timesheet:
                 struct = Structure(data=self)
                 c1 = struct.project_without_wp(project=p, total=total)
                 final_data.update(c1)
-
             elif column2 == '':
                 # Case 2: array of sum values for each wp
                 wps = aux_df.wp.unique().tolist()
@@ -151,6 +162,7 @@ class Timesheet:
                     self.total_hours += total_wps[w]
                     print(f'project "{p}", wp "{w}", total hours "{total_wps[w]}"')
 
+                struct = Structure(data=self)
                 c2 = struct.project_with_wps_without_tasks(project=p, workpackages=wps, total=total_wps)
                 final_data.update(c2)
             else:
@@ -158,6 +170,7 @@ class Timesheet:
                 wps = aux_df.wp.unique().tolist()
                 total_wps = dict()
                 total_tasks = dict()
+                tasks = list()
                 for w in wps:
                     mask_wp = aux_df['wp'].values == w
                     aux_df_wp = aux_df.loc[mask_wp]
@@ -173,6 +186,7 @@ class Timesheet:
                     total_wps[w] = total_tasks
                     print(f'project "{p}", wp "{w}", total hours "{total_wps[w]}"')
 
+                struct = Structure(data=self)
                 c3 = struct.project_with_wps_with_tasks(project=p, workpackages=wps, tasks=tasks, total=total_tasks)
                 final_data.update(c3)
 
@@ -180,9 +194,13 @@ class Timesheet:
         if self.total_hours != self.max_working_hours:
             print(f'Error the number of Total Hours "{self.total_hours}" '
                   f'is different from Max Working Hours "{self.max_working_hours}"')
+
+            return {}
         else:
             print(f'\nTotal hours "{self.total_hours}"')
             print(f'\nData generated: \n{final_data}')
+
+            return final_data
 
     def metadata_extraction(self):
         """
@@ -190,10 +208,10 @@ class Timesheet:
         Year[1,8], and Max Working Hours[x,9]
         :return:
         """
-        length = len(self.values)
-        max_working_hours = length - 74 + 2
+        df = DataFrame(self.values)
+        max_working_hours = df.index[df[6] == 'max working hours'].tolist()[0]
 
-        self.person = self.values[1][3] + " " + self.values[0][3]
-        self.month = self.values[0][7]
-        self.year = self.values[1][7]
+        self.person = self.values[3][3] + " " + self.values[2][3]
+        self.month = self.values[2][7]
+        self.year = self.values[3][7]
         self.max_working_hours = to_timedelta(self.values[max_working_hours][8])
