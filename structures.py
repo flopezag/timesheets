@@ -1,3 +1,6 @@
+from pandas import Timedelta
+
+
 class Structure:
     def __init__(self, data):
         self.data = data
@@ -95,3 +98,32 @@ class Structure:
         print(temp)
         print()
         return temp
+
+    @staticmethod
+    def join_list(uno, dos):
+        # try to mix dos with one
+        if isinstance(uno, dict):
+            for i in dos:
+                # print(i, dos[i])
+                if i in uno:
+                    # print(f'the key "{i}" is in both try join')
+                    result = Structure.join_list(uno[i], dos[i])
+                    # print(result)
+                else:
+                    # print(f'Try to mix... {i}')
+                    uno[i] = dos[i]
+        elif isinstance(uno, list):
+            for idx in range(0, len(uno)):
+                a = uno[idx]
+                b = dos[idx]
+
+                if isinstance(a, Timedelta) and b == 0:
+                    result = a
+                elif isinstance(b, Timedelta) and a == 0:
+                    result = b
+                else:
+                    result = a + b
+
+                uno[idx] = result
+
+            return uno
