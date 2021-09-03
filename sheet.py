@@ -2,13 +2,26 @@ from googleapiclient.discovery import build
 from datetime import datetime, timedelta
 from pandas import DataFrame, Timedelta, to_timedelta
 from structures import Structure
+from networkdays import networkdays
+from calendar import monthrange
 
 
 class Timesheet:
-    def __init__(self, credentials, sheetid, rangename):
+    def __init__(self, credentials, sheetid):
         # The ID and range of a sample spreadsheet.
         self.SAMPLE_SPREADSHEET_ID = sheetid
-        self.SAMPLE_RANGE_NAME = rangename
+        self.service = build('sheets', 'v4', credentials=credentials)
+
+        # Call the Sheets API
+        self.sheet = self.service.spreadsheets()
+
+        # Get the Sheet name
+        sheet_metadata = self.sheet.get(spreadsheetId=self.SAMPLE_SPREADSHEET_ID).execute()
+        sheetname = sheet_metadata['sheets'][0]['properties']['title']
+
+        # Get sheet version
+
+        self.SAMPLE_RANGE_NAME = sheetname + "!" + "B2:N"
 
         # Google Credentials
         self.credentials = credentials
@@ -25,51 +38,107 @@ class Timesheet:
 
         # Calculate correction last row data
         self.row_correction = 0
-        self.correction = {
+        correction = {
             "v. 20210427": 1,
             "v. 20210114": 2,
-            "v. 20201217": 2
+            "v. 20201217": 2,
+
+            "v. 20201130": 0,
+            "v. 20200527": 0,
+            "v. 20190725": 0
         }
+
+        sheet_range = {
+            "v. 20210427": "!B2:N",
+            "v. 20210114": "!B2:N",
+            "v. 20201217": "!B2:N",
+
+            "v. 20201130": "!A1:N",
+            "v. 20200527": "!A1:N",
+            "v. 20190725": "!A1:N"
+        }
+
+        result = self.sheet.values().get(spreadsheetId=self.SAMPLE_SPREADSHEET_ID,
+                                         range=sheetname + "!A:N").execute()
+        version = result.get('values', [])
+        if len(version[0]) == 0:
+            version = version[1][1]
+        else:
+            version = version[0][13]
+
+        self.SAMPLE_RANGE_NAME = sheetname + sheet_range[version]
+        self.row_correction = correction[version]
+        self.lastday = int()
+
+        position_project_description = {
+            "v. 20210427": 2,
+            "v. 20210114": 2,
+            "v. 20201217": 2,
+
+            "v. 20201130": 3,
+            "v. 20200527": 3,
+            "v. 20190725": 3
+        }
+
+        position_start_hours = {
+            "v. 20210427": 6,
+            "v. 20210114": 6,
+            "v. 20201217": 6,
+
+            "v. 20201130": 7,
+            "v. 20200527": 7,
+            "v. 20190725": 7
+        }
+
+        self.position_project_description = position_project_description[version]
+        self.position_start_hours = position_start_hours[version]
+        self.position_end_hours = self.position_start_hours + 1
+        self.position_total_hours = self.position_end_hours + 1
 
     def get_data_from_timesheet(self):
         """Shows basic usage of the Sheets API.
         Prints values from a sample spreadsheet.
         """
-        service = build('sheets', 'v4', credentials=self.credentials)
+        # Request the data
+        result = self.sheet.values().get(spreadsheetId=self.SAMPLE_SPREADSHEET_ID,
+                                         range=self.SAMPLE_RANGE_NAME).execute()
 
-        # Call the Sheets API
-        sheet = service.spreadsheets()
-        result = sheet.values().get(spreadsheetId=self.SAMPLE_SPREADSHEET_ID,
-                                    range=self.SAMPLE_RANGE_NAME).execute()
         values = result.get('values', [])
 
-        service.close()
+        self.service.close()
         self.values = values
-        self.row_correction = self.correction[values[0][0]]
 
     def data_analysis_validation(self):
         df = DataFrame(self.values)
-        last_data_row = df.index[df[6] == 'max working hours'].tolist()[0]
+        # last_data_row = df.index[df[6] == 'max working hours'].tolist()[0]
+        last_data_row = max(df.index[df[0] == str(self.lastday)].tolist())
+        first_data_row = min(df.index[df[0] == '1'].tolist()) + 1
 
         # We substrate 2 lines to this due the the max working hours and the sum
-        # TODO: This only applies to the last version of the template...
-        last_data_row -= self.row_correction
-        aux = self.values[11:last_data_row]
-        last_day = int(aux[len(aux) - 1][0])
+        # TODO: This only applies to the last versions of the template...
+        # last_data_row -= self.row_correction
+        aux = self.values[first_data_row:last_data_row + 1]
+        # last_day = int(aux[len(aux) - 1][0])
 
         # Get the days that are weekends
-        weekend = list(filter(lambda x: x[2] == 'WeekEnd Day', aux))
+        weekend = list(filter(lambda x: x[self.position_project_description] == 'WeekEnd Day', aux))
         weekend = list(map(lambda x: int(x[0]), weekend))
 
-        for i in range(1, last_day):
+        for i in range(1, self.lastday):
             # Filter list for day and extract only the corresponding columns of hours
             # and the day is not weekend
-            temp1 = list(filter(lambda x: x[0] in [str(i)] and x[2] not in ['WeekEnd Day', 'Bank Holiday', 'NOT APPLICABLE'], aux))
+            temp1 = list(
+                filter(
+                    lambda x: x[0] in [str(i)] and x[self.position_project_description] not in
+                              ['WeekEnd Day', 'Bank Holiday', 'NOT APPLICABLE']
+                    , aux
+                )
+            )
 
             # Check if the temp1 is empty, it means that we have a WeekEnd Day or Bank Holiday
             # Therefore we do not need to validate the data
             if len(temp1) != 0:
-                temp1 = list(map(lambda x: [x[6], x[7], x[8]], temp1))
+                temp1 = list(map(lambda x: [x[self.position_start_hours], x[self.position_end_hours], x[self.position_total_hours]], temp1))
 
                 # Check difference between "End h" and "Start h"
                 list(map(lambda x: self.__validate_diff_hours__(day=i, hours=x), temp1))
@@ -115,7 +184,10 @@ class Timesheet:
         df = DataFrame(self.data)
 
         # Assign the correct name to the columns
-        df.columns = ['day', 'code', 'project', 'wp', 'task', 'location', 'start', 'end', 'hours', 'a', 'b', 'c', 'd']
+        if self.position_project_description == 2:
+            df.columns = ['day', 'code', 'project', 'wp', 'task', 'location', 'start', 'end', 'hours', 'a', 'b', 'c', 'd']
+        elif self.position_project_description == 3:
+            df.columns = ['day', 'code', 'e', 'project', 'wp', 'task', 'location', 'start', 'end', 'hours', 'a', 'b', 'c', 'd']
 
         # Extract a sub-dataframe of the data interested to manage ('project', 'wp', 'task', 'hours')
         df = df[["project", "wp", "task", "hours"]]
@@ -209,9 +281,35 @@ class Timesheet:
         :return:
         """
         df = DataFrame(self.values)
-        max_working_hours = df.index[df[6] == 'max working hours'].tolist()[0]
+        max_working_hours = df.index[df[6] == 'max working hours'].tolist()
 
-        self.person = self.values[3][3] + " " + self.values[2][3]
-        self.month = self.values[2][7]
-        self.year = self.values[3][7]
-        self.max_working_hours = to_timedelta(self.values[max_working_hours][8])
+        if len(max_working_hours) != 0:
+            max_working_hours = max_working_hours[0]
+
+            self.person = self.values[3][3] + " " + self.values[2][3]
+            self.month = self.values[2][7]
+            self.year = self.values[3][7]
+            #self.max_working_hours = to_timedelta(self.values[max_working_hours][8])
+        else:
+            # TODO: Files from 2020 and before, have no max working hours
+            self.person = self.values[2][4] + " " + self.values[1][4]
+            self.month = self.values[1][8]
+            self.year = self.values[2][8]
+
+        self.calculate_max_hours_worked()
+
+    def calculate_max_hours_worked(self):
+        # CALCULATE MAX WORKING HOURS
+        s = Structure(data=dict())
+        month = s.get_month_number(string_month=self.month) + 1
+
+        start_date = datetime(int(self.year), month, 1)
+        _, self.lastday = monthrange(int(self.year), month)
+        end_date = datetime(int(self.year), month, self.lastday)
+
+        days = networkdays.Networkdays(start_date, end_date)
+
+        hours = str(len(days.networkdays()) * 8) + ":00:00"
+        print(hours)
+        self.max_working_hours = to_timedelta(hours)
+        print(self.max_working_hours)

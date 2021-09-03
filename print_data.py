@@ -69,7 +69,7 @@ class PrettyPrint:
         else:
             # the data is a Timedelta
             h = data.total_seconds() / 3600
-            content += f'{h:.3f} '
+            content += f'{h:.3f} '.replace('.', ',')
 
         return content
 

@@ -127,3 +127,6 @@ class Structure:
                 uno[idx] = result
 
             return uno
+
+    def get_month_number(self, string_month):
+        return self.month[string_month]
